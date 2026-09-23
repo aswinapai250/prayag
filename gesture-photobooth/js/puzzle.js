@@ -237,13 +237,14 @@ export class PuzzleManager {
   }
 
   /**
-   * Find tile at coordinates or nearest unlocked tile within interaction range.
+   * Find tile at coordinates.
+   * Only returns a tile if the pinch coordinates actually touch that tile.
    * @param {number} px
    * @param {number} py
    * @returns {PuzzleTile|null}
    */
   findTileForPinch(px, py) {
-    const padding = 24; // Generous hit area for kid-friendly interaction
+    const padding = 16; // Generous hit area for kid-friendly interaction
     // Check top tiles first (reverse order)
     for (let i = this.tiles.length - 1; i >= 0; i--) {
       const tile = this.tiles[i];
@@ -257,21 +258,7 @@ export class PuzzleManager {
         return tile;
       }
     }
-
-    // Fallback: nearest unlocked tile within reach
-    const maxReach = Math.max(this.tileW, this.tileH) * 0.75;
-    let nearest = null;
-    let minDist = Infinity;
-    for (const tile of this.tiles) {
-      if (tile.locked) continue;
-      const c = tile.center;
-      const dist = Math.hypot(px - c.x, py - c.y);
-      if (dist < minDist && dist < maxReach) {
-        minDist = dist;
-        nearest = tile;
-      }
-    }
-    return nearest;
+    return null;
   }
 
   /**
@@ -282,7 +269,7 @@ export class PuzzleManager {
    */
   startDrag(px, py) {
     if (!Number.isFinite(px) || !Number.isFinite(py)) return false;
-    if (this.activeDragTile) return true;
+    if (this.activeDragTile) return true; // Already dragging a tile, preserve it!
     const tile = this.findTileForPinch(px, py);
     if (!tile) return false;
 
@@ -301,22 +288,23 @@ export class PuzzleManager {
   }
 
   /**
-   * Update position of currently held tile.
+   * Update position of currently held tile with smooth lerp.
    * @param {number} px
    * @param {number} py
    */
   updateDrag(px, py) {
     if (!this.activeDragTile || !Number.isFinite(px) || !Number.isFinite(py)) return;
 
-    let nextX = px - this.dragOffsetX;
-    let nextY = py - this.dragOffsetY;
+    let targetX = px - this.dragOffsetX;
+    let targetY = py - this.dragOffsetY;
 
     // Clamp inside canvas boundary
-    nextX = Math.max(4, Math.min(this.canvasW - this.activeDragTile.tileW - 4, nextX));
-    nextY = Math.max(4, Math.min(this.canvasH - this.activeDragTile.tileH - 4, nextY));
+    targetX = Math.max(0, Math.min(this.canvasW - this.activeDragTile.tileW, targetX));
+    targetY = Math.max(0, Math.min(this.canvasH - this.activeDragTile.tileH, targetY));
 
-    this.activeDragTile.x = nextX;
-    this.activeDragTile.y = nextY;
+    // Smooth lerp to eliminate hand tracking jitter
+    this.activeDragTile.x = this.activeDragTile.x * 0.25 + targetX * 0.75;
+    this.activeDragTile.y = this.activeDragTile.y * 0.25 + targetY * 0.75;
   }
 
   /**

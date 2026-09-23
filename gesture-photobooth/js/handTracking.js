@@ -247,10 +247,16 @@ export class HandTracker {
 
   /**
    * @param {Array<{x:number,y:number,z:number}>} landmarks
-   * @param {number} [threshold]
+   * @param {boolean|number} [isHoldingOrThreshold]
    * @returns {boolean}
    */
-  static isPinching(landmarks, threshold = PINCH_THRESHOLD) {
+  static isPinching(landmarks, isHoldingOrThreshold = false) {
+    let threshold = PINCH_THRESHOLD;
+    if (typeof isHoldingOrThreshold === 'number') {
+      threshold = isHoldingOrThreshold;
+    } else if (isHoldingOrThreshold === true) {
+      threshold = 0.14; // Generous holding threshold to prevent dropped drags
+    }
     return HandTracker.pinchDistance(landmarks) < threshold;
   }
 

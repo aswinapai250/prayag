@@ -37,6 +37,7 @@ export class GestureStateMachine {
     this.solvedAt = 0;
     this.activeDragWrist = null;
     this.isPinchingActive = false;
+    this.releaseFramesCount = 0;
   }
 
   /**
@@ -86,7 +87,7 @@ export class GestureStateMachine {
     // 2. If no locked hand or lost tracking, prioritize any pinching hand
     if (!activeHand) {
       for (const hand of landmarks) {
-        if (HandTracker.isPinching(hand)) {
+        if (HandTracker.isPinching(hand, false)) {
           activeHand = hand;
           break;
         }
@@ -140,14 +141,34 @@ export class GestureStateMachine {
       // Limit to exactly ONE active hand during puzzle solving
       const activeHand = this.getActivePuzzleHand(landmarks);
 
-      if (activeHand && HandTracker.isPinching(activeHand)) {
-        this.isPinchingActive = true;
-        if (this.onPinchMove) {
-          this.onPinchMove(activeHand);
+      if (activeHand) {
+        // Use hysteresis: if already dragging, requires fingers to open wider before dropping
+        const currentlyPinching = HandTracker.isPinching(activeHand, this.isPinchingActive);
+
+        if (currentlyPinching) {
+          this.releaseFramesCount = 0;
+          this.isPinchingActive = true;
+          if (this.onPinchMove) {
+            this.onPinchMove(activeHand);
+          }
+        } else {
+          // Hand opened fingers — require at least 2 consecutive frames before releasing
+          if (this.isPinchingActive) {
+            this.releaseFramesCount += 1;
+            if (this.releaseFramesCount >= 2) {
+              this.isPinchingActive = false;
+              this.releaseFramesCount = 0;
+              if (this.onPinchRelease) {
+                this.onPinchRelease();
+              }
+            }
+          }
         }
       } else {
+        // Hand not found in frame
         if (this.isPinchingActive) {
           this.isPinchingActive = false;
+          this.releaseFramesCount = 0;
           if (this.onPinchRelease) {
             this.onPinchRelease();
           }
@@ -204,6 +225,7 @@ export class GestureStateMachine {
       this.solvedAt = 0;
       this.activeDragWrist = null;
       this.isPinchingActive = false;
+      this.releaseFramesCount = 0;
     }
   }
 
@@ -214,5 +236,6 @@ export class GestureStateMachine {
     this.solvedAt = 0;
     this.activeDragWrist = null;
     this.isPinchingActive = false;
+    this.releaseFramesCount = 0;
   }
 }
