@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Prayag — Gesture-Controlled Photo Booth & Puzzle</title>
+  
+  <!-- Primary Meta Tags -->
+  <meta name="title" content="Prayag — Gesture-Controlled Photo Booth & Puzzle">
+  <meta name="description" content="A real-time, browser-based webcam photo booth and 3x3 jigsaw puzzle controlled entirely with AI hand gestures via MediaPipe.">
+  <meta name="theme-color" content="#1A1A1D">
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="http://localhost:8080/">
+  <meta property="og:title" content="Prayag — Gesture-Controlled Photo Booth & Puzzle">
+  <meta property="og:description" content="Capture photos with a two-hand pinch, solve 3x3 jigsaw puzzles with one-hand drag, and download your vintage photo strips!">
+  <meta property="og:image" content="https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80">
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image">
+  <meta property="twitter:url" content="http://localhost:8080/">
+  <meta property="twitter:title" content="Prayag — Gesture-Controlled Photo Booth & Puzzle">
+  <meta property="twitter:description" content="Capture photos with a two-hand pinch, solve 3x3 jigsaw puzzles with one-hand drag, and download your vintage photo strips!">
+  <meta property="twitter:image" content="https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80">
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&family=Nunito+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Top Navigation & Instruction Banner -->
+    <header id="instruction-banner" class="instruction-banner" role="banner">
+      <button id="help-btn" class="icon-nav-btn help-btn" type="button" aria-label="Open gesture instructions guide" title="How to Play">
+        <span class="btn-icon">💡</span>
+        <span class="btn-text">Guide</span>
+      </button>
+      
+      <div id="banner-text" class="banner-text" aria-live="polite">
+        Pinch both hands to capture! Pinch one hand to drag pieces!
+      </div>
+
+      <button id="gallery-toggle-btn" class="icon-nav-btn gallery-toggle-btn" type="button" aria-label="Toggle photo strip gallery" title="Photo Strips">
+        <span class="btn-icon">📸</span>
+        <span class="btn-text">Gallery</span>
+        <span id="gallery-badge" class="badge">0</span>
+      </button>
+    </header>
+
+    <!-- Main Canvas Stage Area -->
+    <main id="stage" role="main">
+      <canvas id="main-canvas" aria-label="Interactive gesture photo booth and puzzle canvas" role="img"></canvas>
+      
+      <!-- Error & Permission Fallback Overlay -->
+      <div id="error-overlay" class="error-overlay hidden" role="alert" aria-live="assertive">
+        <div class="error-card">
+          <div class="error-icon">📷</div>
+          <p id="error-message">Camera access is required for hand tracking.</p>
+          <button id="retry-camera-btn" class="retry-btn" type="button" aria-label="Retry camera connection">
+            🔄 Enable Camera
+          </button>
+        </div>
+      </div>
+
+      <!-- Quick Action Controls -->
+      <div class="stage-controls">
+        <button id="reset-btn" class="reset-btn" type="button" aria-label="Reset photo booth and puzzle">
+          <span class="btn-icon">🔄</span> <span class="btn-text">Reset</span>
+        </button>
+      </div>
+    </main>
+
+    <!-- Sidebar Backdrop for Mobile Drawer -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop" aria-hidden="true"></div>
+
+    <!-- Photo Strips Aside Gallery -->
+    <aside id="sidebar" class="sidebar" role="region" aria-label="Photo Strips Gallery">
+      <div class="sidebar-header">
+        <div class="sidebar-header-title">
+          <h2 class="sidebar-title">Photo Strips</h2>
+          <span id="strips-count-tag" class="count-tag">0 shots</span>
+        </div>
+        <div class="sidebar-header-actions">
+          <button id="clear-strips-btn" class="clear-all-btn" type="button" aria-label="Clear all captured photo strips" title="Clear All Photos">
+            Clear All
+          </button>
+          <button id="close-sidebar-btn" class="close-sidebar-btn" type="button" aria-label="Close photo strips gallery" title="Close Gallery">
+            ✕
+          </button>
+        </div>
+      </div>
+      
+      <div id="sidebar-empty" class="sidebar-empty">
+        <div class="empty-icon">🎞️</div>
+        <p class="empty-title">No photos captured yet</p>
+        <p class="empty-sub">Pinch with both hands in front of the camera to take your first photo!</p>
+      </div>
+
+      <div id="sidebar-strips" class="sidebar-strips" aria-live="polite"></div>
+    </aside>
+
+    <!-- How to Play / Gesture Guide Modal -->
+    <div id="help-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-card">
+        <div class="modal-header">
+          <h2 id="modal-title" class="modal-title">🎮 How to Play Prayag</h2>
+          <button id="close-modal-btn" class="close-modal-btn" type="button" aria-label="Close instruction guide">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="guide-item">
+            <div class="guide-icon">✌️</div>
+            <div class="guide-content">
+              <h3>1. Two-Hand Pinch to Capture</h3>
+              <p>Bring <strong>thumb & index finger together on BOTH hands</strong> at the same time. A 3-second countdown will start and snap your photo!</p>
+            </div>
+          </div>
+          <div class="guide-item">
+            <div class="guide-icon">🤏</div>
+            <div class="guide-content">
+              <h3>2. One-Hand Pinch to Solve Puzzle</h3>
+              <p>Pinch <strong>ONE hand</strong> over a floating tile to grab it. Drag it over its matching slot and release to snap it into place!</p>
+            </div>
+          </div>
+          <div class="guide-item">
+            <div class="guide-icon">📥</div>
+            <div class="guide-content">
+              <h3>3. Download Your Strips</h3>
+              <p>Once solved or anytime in the sidebar gallery, download your high-resolution photo strips or clear them to start a fresh collection.</p>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button id="got-it-btn" class="got-it-btn" type="button" aria-label="Close guide and play">Let's Play! 🚀</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <video id="webcam" autoplay playsinline muted aria-hidden="true"></video>
+
+  <!-- MediaPipe Hands (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
