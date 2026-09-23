@@ -1,5 +1,11 @@
 /**
- * Entry point — wires up webcam, MediaPipe, gesture state, UI controls, and the game loop.
+ * Main Application Orchestrator for Prayag Gesture Photobooth
+ * 
+ * Coordinates:
+ * 1. WebCam stream initialization with performance-optimized constraints (640x480)
+ * 2. Asynchronous MediaPipe landmark detection decoupled from 60 FPS canvas render loop
+ * 3. Single primary hand cursor rendering during puzzle interactions
+ * 4. Snapshots, countdown timers, puzzle state transitions, and responsive canvas sizing
  */
 
 import { HandTracker, MIRROR_DISPLAY, getPinchCenter } from './js/handTracking.js';
@@ -35,7 +41,7 @@ const helpModal = document.getElementById('help-modal');
 const closeModalBtn = document.getElementById('close-modal-btn');
 const gotItBtn = document.getElementById('got-it-btn');
 
-// Core Managers
+// Core Subsystems
 const handTracker = new HandTracker();
 const stateMachine = new GestureStateMachine();
 const captureManager = new CaptureManager();
@@ -43,9 +49,10 @@ const puzzleManager = new PuzzleManager();
 const sidebarManager = new SidebarManager(sidebarStrips, sidebarEmpty, galleryBadge, stripsCountTag);
 
 let lastProcessTime = 0;
-const PROCESS_INTERVAL_MS = 28; // ~35 FPS landmark processing for smooth 60 FPS rendering
+const PROCESS_INTERVAL_MS = 28; // ~35 FPS vision processing interval (keeps CPU cool while canvas runs at 60 FPS)
 
 /**
+ * Display user-facing modal error.
  * @param {string} message
  */
 function showError(message) {
@@ -79,7 +86,7 @@ function handlePuzzleSolved() {
 }
 
 function handleCaptureComplete() {
-  // Snapshot clean mirrored video frame — no dots or countdown overlay
+  // Snapshot clean mirrored video frame
   drawVideoFrame(ctx, video, canvas.width, canvas.height);
   captureManager.freezeFromCanvas(canvas);
   puzzleManager.createFromSnapshot(captureManager.frozenCanvas);
@@ -132,7 +139,7 @@ function drawVideoFrame(context, source, w, h) {
 }
 
 /**
- * Size canvas to match video aspect ratio within the stage area.
+ * Size canvas to match video aspect ratio within the stage container.
  */
 function resizeCanvas() {
   const stage = document.getElementById('stage');
@@ -162,12 +169,12 @@ function resizeCanvas() {
 }
 
 /**
- * Initialize webcam with downscaled processing constraints for smooth 60fps performance.
+ * Initialize webcam with downscaled processing constraints for smooth 60 FPS performance.
  * @returns {Promise<boolean>}
  */
 async function initWebcam() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showError('Camera not available. Please use a browser with webcam support.');
+    showError('Camera not available. Please use a modern browser with webcam support.');
     return false;
   }
 
@@ -207,7 +214,7 @@ async function initWebcam() {
 }
 
 /**
- * Main render & game animation loop.
+ * Decoupled 60 FPS Game & Canvas Render Loop.
  * @param {number} timestamp
  */
 function gameLoop(timestamp) {
@@ -220,6 +227,7 @@ function gameLoop(timestamp) {
   const inPuzzle = puzzleManager.isActive;
   const showLiveFeed = !isFrozen && !inPuzzle;
 
+  // 1. Render primary scene background (video feed, puzzle canvas, or snapshot)
   if (showLiveFeed && video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
     drawVideoFrame(ctx, video, w, h);
   } else if (inPuzzle) {
@@ -228,26 +236,25 @@ function gameLoop(timestamp) {
     ctx.drawImage(captureManager.frozenCanvas, 0, 0, w, h);
   }
 
-  // Visual tracking indicators & smoothed pinch coordinates
+  // 2. Render visual cursor & tracking dots with Single-Hand Lock during puzzle
   if ((showLiveFeed || inPuzzle) && handTracker.landmarks.length > 0) {
     if (inPuzzle) {
-      // STRICT SINGLE-HAND CONSTRAINT: Only render dots for the single active puzzle hand
+      // SINGLE-HAND LOCK: Only render visual cursor for the active primary hand
       const activeHand = stateMachine.getActivePuzzleHand(handTracker.landmarks);
       if (activeHand) {
         HandTracker.drawTrackingDots(ctx, [activeHand], w, h);
       }
     } else {
-      // In idle/live feed, render all hands for two-hand pinch trigger
+      // Idle / Countdown: render all hands for 2-hand pinch feedback
       HandTracker.drawTrackingDots(ctx, handTracker.landmarks, w, h);
     }
   }
 
-  // Animated 3-2-1 countdown overlay
+  // 3. Countdown & Flash FX
   if (isCountingDown && captureManager.countdownValue > 0) {
     captureManager.drawCountdown(ctx, captureManager.countdownValue, w, h);
   }
 
-  // Shutter flash effect
   if (isFrozen && !inPuzzle) {
     captureManager.drawFlash(ctx, w, h, timestamp);
   } else if (inPuzzle && timestamp < captureManager.flashUntil) {
@@ -256,7 +263,7 @@ function gameLoop(timestamp) {
 
   captureManager.update(timestamp);
 
-  // Send frame to MediaPipe at steady interval
+  // 4. Asynchronously send video frame to MediaPipe pipeline (throttled to ~35 FPS)
   if (timestamp - lastProcessTime >= PROCESS_INTERVAL_MS) {
     lastProcessTime = timestamp;
 
@@ -270,7 +277,7 @@ function gameLoop(timestamp) {
 }
 
 /**
- * Mouse interaction fallback for testing without webcam or as an accessibility aid.
+ * Mouse interaction fallback for testing without webcam.
  */
 function setupMouseFallback() {
   let isMouseDown = false;
@@ -308,13 +315,11 @@ function setupMouseFallback() {
 }
 
 /**
- * Setup modal guide and mobile drawer UI listeners.
+ * UI buttons and event listeners.
  */
 function setupUIListeners() {
-  // Reset button
   resetBtn.addEventListener('click', handleReset);
 
-  // Camera retry button
   if (retryCameraBtn) {
     retryCameraBtn.addEventListener('click', async () => {
       const ok = await initWebcam();
@@ -324,14 +329,12 @@ function setupUIListeners() {
     });
   }
 
-  // Clear strips gallery
   if (clearStripsBtn) {
     clearStripsBtn.addEventListener('click', () => {
       sidebarManager.clearAll();
     });
   }
 
-  // Mobile sidebar drawer toggles
   const openGallery = () => {
     sidebar.classList.add('open');
     if (sidebarBackdrop) sidebarBackdrop.classList.add('open');

@@ -1,13 +1,34 @@
 /**
- * Slicing captured image into tiles, scatter, snap-to-slot logic.
- * Stage 3: slice + scatter. Stages 4–5: drag + snap.
+ * Slicing captured image into tiles, scatter, hitboxes, drag smoothing, and snap-to-slot logic.
+ * 
+ * Features:
+ * 1. 3x3 Puzzle slice & scatter distribution
+ * 2. Expanded Hitbox detection (+28px margins) for reliable pinch targeting
+ * 3. High-responsiveness Exponential Moving Average (EMA) drag smoothing
+ * 4. Tolerance-based slot snapping with celebration confetti
  */
 
+/**
+ * ============================================================================
+ * CONFIGURATION CONSTANTS
+ * ============================================================================
+ */
 const GRID_SIZE = 3;
 const SCATTER_PADDING = 12;
 const SLOT_AVOID_MARGIN = 50;
-const HITBOX_EXPANSION_MARGIN = 28; // Expands touch/grab target size by 28px around each tile
-const DRAG_LERP_ALPHA = 0.65; // High-responsiveness smoothing (0.65 balances zero lag with micro-jitter suppression)
+
+/**
+ * Expanded Grab Hitbox Margin (pixels):
+ * Extends the grab bounding box by +28px around each tile.
+ * Prevents fast hand movements from slipping off the tile during pinch-in.
+ */
+export const HITBOX_EXPANSION_MARGIN = 28;
+
+/**
+ * Drag Position Smoothing Alpha (EMA: 0.0 < ALPHA <= 1.0):
+ * - 0.65 balances zero drag latency with micro-jitter suppression for high responsiveness.
+ */
+export const DRAG_LERP_ALPHA = 0.65;
 
 export class PuzzleTile {
   /**
@@ -34,7 +55,7 @@ export class PuzzleTile {
     this.snapTime = 0;
   }
 
-  /** @returns {{ x: number, y: number }} */
+  /** @returns {{ x: number, y: number }} Center coordinate */
   get center() {
     const drawX = this.locked ? this.slotX : this.x;
     const drawY = this.locked ? this.slotY : this.y;
@@ -45,6 +66,7 @@ export class PuzzleTile {
   }
 
   /**
+   * Draw tile with appropriate glow, shadow, and snap feedback.
    * @param {CanvasRenderingContext2D} ctx
    * @param {number} [timestamp]
    */
@@ -57,6 +79,7 @@ export class PuzzleTile {
     const isSnapping = this.snapTime > 0 && timestamp - this.snapTime < 350;
 
     if (this.isDragging) {
+      // Elevated grab highlight
       ctx.shadowColor = '#3FBAC2';
       ctx.shadowBlur = 20;
       const scale = 1.08;
@@ -66,7 +89,7 @@ export class PuzzleTile {
       ctx.scale(scale, scale);
       ctx.translate(-cx, -cy);
     } else if (isSnapping) {
-      // Golden snap bounce feedback
+      // Golden snap bounce animation
       const progress = (timestamp - this.snapTime) / 350;
       const bounce = 1 + 0.12 * Math.sin(progress * Math.PI);
       const cx = this.slotX + this.tileW / 2;
@@ -77,7 +100,7 @@ export class PuzzleTile {
       ctx.shadowColor = '#F4A300';
       ctx.shadowBlur = 24 * (1 - progress);
     } else if (!this.locked) {
-      // Floating unsolved tile — elevate above the board with drop shadow
+      // Unsolved floating tile elevation
       ctx.shadowColor = 'rgba(0, 0, 0, 0.65)';
       ctx.shadowBlur = 12;
       ctx.shadowOffsetX = 2;
@@ -86,6 +109,7 @@ export class PuzzleTile {
 
     ctx.drawImage(this.imageCanvas, drawX, drawY, this.tileW, this.tileH);
 
+    // Border highlights
     if (this.isDragging) {
       ctx.strokeStyle = '#3FBAC2';
       ctx.lineWidth = 3;
@@ -96,7 +120,6 @@ export class PuzzleTile {
       ctx.strokeStyle = 'rgba(245, 241, 232, 0.25)';
       ctx.lineWidth = 1;
     } else {
-      // Unsolved floating tile border
       ctx.strokeStyle = 'rgba(245, 241, 232, 0.95)';
       ctx.lineWidth = 2;
     }
@@ -127,7 +150,7 @@ export class PuzzleManager {
   }
 
   /**
-   * Slice a frozen snapshot into a 3×3 grid and scatter tiles.
+   * Slice snapshot image into 3×3 grid tiles and scatter around canvas.
    * @param {HTMLCanvasElement} sourceCanvas
    */
   createFromSnapshot(sourceCanvas) {
@@ -178,7 +201,7 @@ export class PuzzleManager {
     this.isActive = true;
   }
 
-  /** Randomise tile positions, keeping them away from their correct slots and dispersing them to minimize overlap. */
+  /** Randomize tile positions, avoiding correct slots and dispersing tiles. */
   scatterTiles() {
     const placedPositions = [];
 
@@ -238,17 +261,15 @@ export class PuzzleManager {
     );
   }
 
-
   /**
-   * Find tile at coordinates.
-   * Uses expanded bounding box hitbox (28px) for effortless, natural grabbing.
-   * @param {number} px
-   * @param {number} py
+   * Find tile at coordinates using expanded hitbox (+28px margin) for natural, effortless grabbing.
+   * @param {number} px Smoothed pinch X coordinate
+   * @param {number} py Smoothed pinch Y coordinate
    * @returns {PuzzleTile|null}
    */
   findTileForPinch(px, py) {
     const padding = HITBOX_EXPANSION_MARGIN;
-    // Check top tiles first (reverse order)
+    // Iterate in reverse (top-most rendered tiles first)
     for (let i = this.tiles.length - 1; i >= 0; i--) {
       const tile = this.tiles[i];
       if (tile.locked) continue;
@@ -268,11 +289,11 @@ export class PuzzleManager {
    * Begin dragging a tile at coordinates.
    * @param {number} px
    * @param {number} py
-   * @returns {boolean}
+   * @returns {boolean} True if a tile was grabbed
    */
   startDrag(px, py) {
     if (!Number.isFinite(px) || !Number.isFinite(py)) return false;
-    if (this.activeDragTile) return true; // Already dragging a tile, preserve it!
+    if (this.activeDragTile) return true; // Keep holding current tile
     const tile = this.findTileForPinch(px, py);
     if (!tile) return false;
 
@@ -281,7 +302,7 @@ export class PuzzleManager {
     this.dragOffsetX = px - tile.x;
     this.dragOffsetY = py - tile.y;
 
-    // Bring dragged tile to top of render stack
+    // Bring grabbed tile to top of render order
     const idx = this.tiles.indexOf(tile);
     if (idx !== -1) {
       this.tiles.splice(idx, 1);
@@ -291,7 +312,7 @@ export class PuzzleManager {
   }
 
   /**
-   * Update position of currently held tile with high-responsiveness EMA filter.
+   * Update position of currently dragged tile with high-responsiveness EMA filter.
    * @param {number} px
    * @param {number} py
    */
@@ -311,7 +332,7 @@ export class PuzzleManager {
   }
 
   /**
-   * Release drag and check snap tolerance to slot.
+   * Release drag and evaluate snap tolerance to destination slot.
    * @param {number} timestamp
    * @returns {{ snapped: boolean, isSolved: boolean }}
    */
@@ -373,6 +394,7 @@ export class PuzzleManager {
   }
 
   /**
+   * Render puzzle board, tiles, and celebration effects.
    * @param {CanvasRenderingContext2D} ctx
    * @param {number} width
    * @param {number} height
@@ -384,7 +406,7 @@ export class PuzzleManager {
     ctx.fillStyle = '#1A1A1D';
     ctx.fillRect(0, 0, width, height);
 
-    // Draw grid slot guidelines
+    // Draw slot outlines
     ctx.strokeStyle = 'rgba(245, 241, 232, 0.15)';
     ctx.lineWidth = 1;
     for (let row = 0; row < this.gridSize; row++) {
@@ -395,10 +417,7 @@ export class PuzzleManager {
       }
     }
 
-    // Render tiles in strict z-index order:
-    // 1. All locked tiles first (background base)
-    // 2. All unlocked floating tiles on top of locked tiles
-    // 3. The actively dragged tile on the very top
+    // Render order: locked -> unlocked -> active dragged tile
     const lockedTiles = [];
     const unlockedTiles = [];
     let draggedTile = null;
@@ -425,11 +444,10 @@ export class PuzzleManager {
       draggedTile.draw(ctx, timestamp);
     }
 
-    // Celebration effect when solved
+    // Solved celebration banner & confetti
     if (this.solvedAt > 0) {
       const elapsed = timestamp - this.solvedAt;
 
-      // Draw confetti particles
       ctx.save();
       for (const p of this.particles) {
         p.x += p.vx;
@@ -446,7 +464,6 @@ export class PuzzleManager {
       }
       ctx.restore();
 
-      // Celebration banner overlay
       ctx.save();
       const alpha = Math.min(0.85, elapsed / 500);
       ctx.fillStyle = `rgba(26, 26, 29, ${alpha * 0.75})`;

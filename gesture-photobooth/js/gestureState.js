@@ -1,5 +1,11 @@
 /**
- * State machine: idle / countdown / dragging / solved
+ * Gesture State Machine & Primary Hand Lock Controller
+ * 
+ * Manages photo booth transitions: IDLE -> COUNTDOWN -> PUZZLE -> SOLVED
+ * Implements:
+ * 1. Dual-hand pinch detection for photo capture in crowded frames
+ * 2. Strict Single-Hand Lock during puzzle dragging (ignores secondary/background hands)
+ * 3. Hysteresis drag state persistence with frame-loss debouncing
  */
 
 import { HandTracker } from './handTracking.js';
@@ -16,8 +22,14 @@ export const GestureType = {
   ONE_HAND_PINCH_MOVE: 'ONE_HAND_PINCH_MOVE',
 };
 
+/** Cooldown period in ms after photo capture before another capture can trigger. */
 const CAPTURE_COOLDOWN_MS = 1000;
-const PINCH_DEBOUNCE_FRAMES = 5;
+
+/** Consecutive frames of 2-hand pinch required to start countdown (filters out transient noise). */
+const PINCH_DEBOUNCE_FRAMES = 4;
+
+/** Consecutive frames of opened fingers required before firing drag release (guards against tracking loss). */
+const RELEASE_DEBOUNCE_FRAMES = 2;
 
 export class GestureStateMachine {
   constructor() {
@@ -25,6 +37,8 @@ export class GestureStateMachine {
     this.state = AppState.IDLE;
     this.pinchHoldFrames = 0;
     this.lastCaptureTime = 0;
+
+    /** Callbacks */
     /** @type {(() => void)|null} */
     this.onCaptureTrigger = null;
     /** @type {((handLandmarks: Array<{x:number,y:number,z:number}>) => void)|null} */
@@ -33,16 +47,19 @@ export class GestureStateMachine {
     this.onPinchRelease = null;
     /** @type {(() => void)|null} */
     this.onAutoReset = null;
+
     this.noHandSince = 0;
     this.solvedAt = 0;
+
+    // Single-Hand Lock state for puzzle dragging
     this.activeDragWrist = null;
     this.isPinchingActive = false;
     this.releaseFramesCount = 0;
   }
 
   /**
-   * Check if any 2 hands in the frame are pinching simultaneously.
-   * Works reliably in crowds where multiple hands or multiple people are present.
+   * Detect if any two distinct hands in the frame are pinching simultaneously.
+   * Allows groups or individuals to easily trigger the photo booth countdown.
    * @param {Array<Array<{x:number,y:number,z:number}>>} landmarks
    * @returns {boolean}
    */
@@ -50,7 +67,7 @@ export class GestureStateMachine {
     if (!Array.isArray(landmarks) || landmarks.length < 2) return false;
     let pinchCount = 0;
     for (const hand of landmarks) {
-      if (HandTracker.isPinching(hand)) {
+      if (HandTracker.isPinching(hand, false)) {
         pinchCount += 1;
       }
     }
@@ -58,10 +75,16 @@ export class GestureStateMachine {
   }
 
   /**
-   * Selects and locks onto a single hand for puzzle interactions.
-   * Prevents multiple hands in the frame from interfering or cluttering the puzzle.
+   * Selects and strictly locks onto a SINGLE primary hand during puzzle solving.
+   * Filters out extraneous hands in the background to prevent piece stealing or cursor jitter.
+   * 
+   * Strategy:
+   * 1. If already locked onto a hand, track the closest hand by wrist proximity.
+   * 2. If not locked, prioritize any actively pinching hand.
+   * 3. Otherwise, fall back to the first detected hand in the viewport.
+   * 
    * @param {Array<Array<{x:number,y:number,z:number}>>} landmarks
-   * @returns {Array<{x:number,y:number,z:number}>|null}
+   * @returns {Array<{x:number,y:number,z:number}>|null} Primary hand landmarks
    */
   getActivePuzzleHand(landmarks) {
     if (!Array.isArray(landmarks) || landmarks.length === 0) {
@@ -71,9 +94,9 @@ export class GestureStateMachine {
 
     let activeHand = null;
 
-    // 1. If already locked onto a hand, find that same hand in current frame by wrist proximity
+    // 1. If currently tracking a hand, maintain lock using spatial wrist tracking
     if (this.activeDragWrist) {
-      let bestDist = 0.35;
+      let bestDist = 0.35; // Maximum association radius in normalized coordinates
       for (const hand of landmarks) {
         if (!hand || !hand[0]) continue;
         const d = Math.hypot(hand[0].x - this.activeDragWrist.x, hand[0].y - this.activeDragWrist.y);
@@ -84,7 +107,7 @@ export class GestureStateMachine {
       }
     }
 
-    // 2. If no locked hand or lost tracking, prioritize any pinching hand
+    // 2. If no locked hand or tracking was lost, pick the first pinching hand
     if (!activeHand) {
       for (const hand of landmarks) {
         if (HandTracker.isPinching(hand, false)) {
@@ -94,7 +117,7 @@ export class GestureStateMachine {
       }
     }
 
-    // 3. Fallback to the first detected hand if none is pinching
+    // 3. Fallback to primary hand (first detected)
     if (!activeHand && landmarks.length > 0) {
       activeHand = landmarks[0];
     }
@@ -110,25 +133,25 @@ export class GestureStateMachine {
   }
 
   /**
+   * Main state machine evaluation tick.
    * @param {{ landmarks: Array<Array<{x:number,y:number,z:number}>> }} handData
    * @param {number} timestamp
-   * @returns {string}
+   * @returns {string} Current AppState
    */
   update(handData, timestamp) {
     const landmarks = (handData && Array.isArray(handData.landmarks)) ? handData.landmarks : [];
 
     if (this.state === AppState.IDLE) {
+      // Respect capture cooldown
       if (timestamp - this.lastCaptureTime < CAPTURE_COOLDOWN_MS) {
         this.pinchHoldFrames = 0;
         return this.state;
       }
 
+      // Check for dual-hand pinch trigger
       if (this.detectTwoHandPinch(landmarks)) {
         this.pinchHoldFrames += 1;
-        if (
-          this.pinchHoldFrames >= PINCH_DEBOUNCE_FRAMES &&
-          this.onCaptureTrigger
-        ) {
+        if (this.pinchHoldFrames >= PINCH_DEBOUNCE_FRAMES && this.onCaptureTrigger) {
           this.pinchHoldFrames = 0;
           this.lastCaptureTime = timestamp;
           this.state = AppState.COUNTDOWN;
@@ -138,24 +161,26 @@ export class GestureStateMachine {
         this.pinchHoldFrames = 0;
       }
     } else if (this.state === AppState.PUZZLE) {
-      // Limit to exactly ONE active hand during puzzle solving
+      // Strictly bound to SINGLE primary hand
       const activeHand = this.getActivePuzzleHand(landmarks);
 
       if (activeHand) {
-        // Use hysteresis: if already dragging, requires fingers to open wider before dropping
-        const currentlyPinching = HandTracker.isPinching(activeHand, this.isPinchingActive);
+        // Evaluate pinch using dual-threshold hysteresis:
+        // isPinchingActive: true -> requires PINCH_END_THRESHOLD (0.080) to release
+        // isPinchingActive: false -> requires PINCH_START_THRESHOLD (0.050) to grab
+        const isCurrentlyPinching = HandTracker.isPinching(activeHand, this.isPinchingActive);
 
-        if (currentlyPinching) {
+        if (isCurrentlyPinching) {
           this.releaseFramesCount = 0;
           this.isPinchingActive = true;
           if (this.onPinchMove) {
             this.onPinchMove(activeHand);
           }
         } else {
-          // Hand opened fingers — require at least 2 consecutive frames before releasing
+          // Hand opened fingers: debounce over consecutive frames to avoid camera noise drops
           if (this.isPinchingActive) {
             this.releaseFramesCount += 1;
-            if (this.releaseFramesCount >= 2) {
+            if (this.releaseFramesCount >= RELEASE_DEBOUNCE_FRAMES) {
               this.isPinchingActive = false;
               this.releaseFramesCount = 0;
               if (this.onPinchRelease) {
@@ -165,7 +190,7 @@ export class GestureStateMachine {
           }
         }
       } else {
-        // Hand not found in frame
+        // Hand completely lost from camera view
         if (this.isPinchingActive) {
           this.isPinchingActive = false;
           this.releaseFramesCount = 0;
@@ -175,7 +200,7 @@ export class GestureStateMachine {
         }
       }
     } else if (this.state === AppState.SOLVED) {
-      // Auto-reset when crowd steps away (5s of no hands), or max 15s queue timeout
+      // Auto-reset when users walk away (5s with no hands detected), or 15s max queue limit
       if (landmarks.length === 0) {
         if (!this.noHandSince) {
           this.noHandSince = timestamp;
@@ -188,7 +213,6 @@ export class GestureStateMachine {
         this.noHandSince = 0;
       }
 
-      // Hard timeout of 15 seconds so queue keeps moving
       if (this.solvedAt > 0 && timestamp - this.solvedAt >= 15000) {
         if (this.onAutoReset) {
           this.onAutoReset();
@@ -199,7 +223,7 @@ export class GestureStateMachine {
     return this.state;
   }
 
-  /** @returns {string} */
+  /** @returns {string} Instruction banner prompt text */
   getInstructionText() {
     switch (this.state) {
       case AppState.IDLE:

@@ -1,6 +1,12 @@
 /**
- * MediaPipe Hands setup, Exponential Moving Average (EMA) smoothing filters,
- * hysteresis pinch math, and visual cursor rendering.
+ * Hand Tracking & Computer Vision Pipeline for Prayag Gesture Photobooth
+ * 
+ * Includes:
+ * 1. MediaPipe Hands setup & lifecycle management
+ * 2. Exponential Moving Average (EMA) coordinate low-pass filters for jitter suppression
+ * 3. Dual-threshold hysteresis pinch math (prevents grab/release flicker)
+ * 4. Multi-hand tracking with persistent landmark smoothing & wrist association
+ * 5. High-visibility on-screen cursor halo & gesture reticle rendering
  */
 
 const FINGERTIP_INDICES = [4, 8, 12, 16, 20];
@@ -8,32 +14,60 @@ const THUMB_TIP = 4;
 const INDEX_TIP = 8;
 
 /**
- * Pinch Detection Thresholds (Normalized Euclidean Distance):
- * - PINCH_START_THRESHOLD: Distance to trigger a grab (Pinch In) ~0.055 (~35-40px)
- * - PINCH_END_THRESHOLD: Distance to release a held grab (Pinch Out) ~0.085 (~55-60px)
- * The gap (~0.030) provides hysteresis preventing jitter-induced drops.
+ * ============================================================================
+ * TUNABLE PARAMETERS & THRESHOLDS
+ * ============================================================================
  */
-export const PINCH_START_THRESHOLD = 0.055;
-export const PINCH_END_THRESHOLD = 0.085;
-
-/** Default smoothing alpha for low-pass filter (0.35 - 0.50 balances zero-latency with jitter suppression) */
-export const EMA_ALPHA = 0.42;
-
-/** Mirror front-camera display so hands move naturally (like a selfie view). */
-export const MIRROR_DISPLAY = true;
 
 /**
- * Exponential Moving Average (EMA) Low-Pass Filter for spatial stability.
- * Formula: smoothed = alpha * new + (1 - alpha) * prev
+ * Dual-Threshold Pinch Hysteresis (Normalized Euclidean Distance between Thumb & Index):
+ * - PINCH_START_THRESHOLD (~0.050 / ~35-40px): Fingers must close tighter than this to trigger a grab.
+ * - PINCH_END_THRESHOLD   (~0.080 / ~55-60px): Fingers must open wider than this to release a held piece.
+ * The gap (~0.030) creates a hysteresis band that eliminates micro-flicker near the threshold boundary.
+ */
+export const PINCH_START_THRESHOLD = 0.050; // Grab threshold (Pinch-In)
+export const PINCH_END_THRESHOLD = 0.080;   // Release threshold (Pinch-Out)
+
+/**
+ * Exponential Moving Average (EMA) Smoothing Factor (0.0 < ALPHA <= 1.0):
+ * - ALPHA = 0.45: Ideal sweet spot balancing zero noticeable latency with excellent jitter suppression.
+ * - Lower values (e.g., 0.30) = buttery smooth but slight visual drag lag.
+ * - Higher values (e.g., 0.65) = instantaneous response but more camera sensor noise.
+ */
+export const EMA_ALPHA = 0.45;
+
+/** Mirror front-camera display so hands move naturally like looking into a mirror. */
+export const MIRROR_DISPLAY = true;
+
+/** Maximum frames to retain hand state across momentary single-frame camera drops. */
+export const MAX_LOST_FRAMES = 3;
+
+/**
+ * ============================================================================
+ * EMA COORDINATE FILTER CLASS
+ * ============================================================================
+ * Low-pass filter for 2D coordinates: S_t = α * X_t + (1 - α) * S_{t-1}
  */
 export class EMAFilter {
+  /**
+   * @param {number} [alpha=EMA_ALPHA] Smoothing coefficient (0 to 1)
+   */
   constructor(alpha = EMA_ALPHA) {
     this.alpha = alpha;
     this.prevX = null;
     this.prevY = null;
   }
 
+  /**
+   * Apply EMA filter to raw (x, y) coordinates.
+   * @param {number} x Raw X coordinate
+   * @param {number} y Raw Y coordinate
+   * @returns {{ x: number, y: number }} Smoothed coordinate point
+   */
   filter(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return { x: this.prevX ?? 0, y: this.prevY ?? 0 };
+    }
     if (this.prevX === null || this.prevY === null || !Number.isFinite(this.prevX)) {
       this.prevX = x;
       this.prevY = y;
@@ -44,18 +78,29 @@ export class EMAFilter {
     return { x: this.prevX, y: this.prevY };
   }
 
+  /**
+   * Reset filter state (called on tracking loss to prevent interpolation artifacts).
+   */
   reset() {
     this.prevX = null;
     this.prevY = null;
   }
+
+  /**
+   * Dynamically update smoothing alpha.
+   * @param {number} newAlpha
+   */
+  setAlpha(newAlpha) {
+    this.alpha = Math.max(0.01, Math.min(1.0, newAlpha));
+  }
 }
 
 /**
- * Convert a normalized landmark to canvas coordinates.
- * @param {{ x: number, y: number }} lm
- * @param {number} width
- * @param {number} height
- * @returns {{ x: number, y: number }}
+ * Convert a normalized MediaPipe landmark (0.0 to 1.0) into canvas pixel space.
+ * @param {{ x: number, y: number }} lm Normalized landmark
+ * @param {number} width Canvas pixel width
+ * @param {number} height Canvas pixel height
+ * @returns {{ x: number, y: number }} Pixel coordinates
  */
 export function landmarkToCanvas(lm, width, height) {
   if (!lm || typeof lm.x !== 'number' || typeof lm.y !== 'number') {
@@ -66,10 +111,11 @@ export function landmarkToCanvas(lm, width, height) {
 }
 
 /**
- * Pinch midpoint in canvas coordinates (for drag targeting and cursor placement).
+ * Calculate the smoothed pinch center in canvas pixel coordinates.
+ * Used for drag targeting, piece grabbing, and on-screen cursor halo placement.
  * @param {Array<{x:number,y:number,z:number}>} landmarks
- * @param {number} width
- * @param {number} height
+ * @param {number} width Canvas pixel width
+ * @param {number} height Canvas pixel height
  * @returns {{ x: number, y: number }}
  */
 export function getPinchCenter(landmarks, width, height) {
@@ -84,6 +130,11 @@ export function getPinchCenter(landmarks, width, height) {
   };
 }
 
+/**
+ * ============================================================================
+ * HAND TRACKER CLASS
+ * ============================================================================
+ */
 export class HandTracker {
   constructor() {
     this.hands = null;
@@ -94,32 +145,31 @@ export class HandTracker {
     this.isProcessing = false;
     this.pendingFrame = false;
 
-    // Cache tracked hands to survive single-frame drops (up to 4 frames of persistence)
+    // Tracked hands with persistent per-landmark EMA filters across frames
     /** @type {Array<{landmarks: Array<{x:number,y:number,z:number}>, lostFrames: number, filters: EMAFilter[]}>} */
     this.trackedHands = [];
-    this.MAX_LOST_FRAMES = 4;
+    this.MAX_LOST_FRAMES = MAX_LOST_FRAMES;
   }
 
   /**
-   * Initialize MediaPipe Hands from CDN globals.
+   * Initialize MediaPipe Hands instance from CDN.
    * @returns {Promise<boolean>}
    */
   async init() {
     try {
       if (typeof Hands === 'undefined') {
-        throw new Error('MediaPipe Hands failed to load. Check your internet connection and refresh.');
+        throw new Error('MediaPipe Hands library not found. Check network connection and refresh.');
       }
 
       this.hands = new Hands({
-        locateFile: (file) =>
-          `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
+        locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`,
       });
 
       this.hands.setOptions({
-        maxNumHands: 4, // Support crowds and multiple hands during capture
+        maxNumHands: 4, // Support crowds during 2-hand capture trigger
         modelComplexity: 1,
-        minDetectionConfidence: 0.45,
-        minTrackingConfidence: 0.45,
+        minDetectionConfidence: 0.5,
+        minTrackingConfidence: 0.5,
       });
 
       this.hands.onResults((results) => {
@@ -147,7 +197,7 @@ export class HandTracker {
   }
 
   /**
-   * Match newly detected hands with previous tracked hands and apply EMA smoothing.
+   * Match detected hands across frames using spatial wrist proximity and smooth all 21 landmarks via EMA.
    * @param {Array<Array<{x:number,y:number,z:number}>>} detected
    */
   updateTrackedHands(detected) {
@@ -155,14 +205,12 @@ export class HandTracker {
       for (const hand of this.trackedHands) {
         hand.lostFrames += 1;
       }
-      this.trackedHands = this.trackedHands.filter(
-        (h) => h.lostFrames <= this.MAX_LOST_FRAMES
-      );
+      this.trackedHands = this.trackedHands.filter((h) => h.lostFrames <= this.MAX_LOST_FRAMES);
       this.landmarks = this.trackedHands.map((h) => h.landmarks);
       return;
     }
 
-    // Filter out incomplete hands (< 21 landmarks or missing wrist)
+    // Filter incomplete hands
     const validDetected = detected.filter(
       (hand) => Array.isArray(hand) && hand.length >= 21 && hand[0] && typeof hand[0].x === 'number'
     );
@@ -171,9 +219,7 @@ export class HandTracker {
       for (const hand of this.trackedHands) {
         hand.lostFrames += 1;
       }
-      this.trackedHands = this.trackedHands.filter(
-        (h) => h.lostFrames <= this.MAX_LOST_FRAMES
-      );
+      this.trackedHands = this.trackedHands.filter((h) => h.lostFrames <= this.MAX_LOST_FRAMES);
       this.landmarks = this.trackedHands.map((h) => h.landmarks);
       return;
     }
@@ -181,11 +227,11 @@ export class HandTracker {
     const updated = [];
     const usedDetected = new Set();
 
-    // Match existing tracked hands to nearest detected hand by wrist (landmark 0)
+    // 1. Match existing tracked hands to nearest newly detected hand by wrist landmark
     for (const oldHand of this.trackedHands) {
       if (!oldHand || !oldHand.landmarks || !oldHand.landmarks[0]) continue;
       let bestIdx = -1;
-      let bestDist = 0.35; // max association distance in normalized coords
+      let bestDist = 0.35; // Maximum spatial association radius in normalized space
 
       for (let i = 0; i < validDetected.length; i++) {
         if (usedDetected.has(i)) continue;
@@ -201,8 +247,8 @@ export class HandTracker {
       if (bestIdx !== -1) {
         usedDetected.add(bestIdx);
         const filters = oldHand.filters || Array.from({ length: 21 }, () => new EMAFilter(EMA_ALPHA));
-        
-        // Apply Exponential Moving Average filter across all 21 landmarks
+
+        // Smooth all 21 landmarks through per-landmark EMA filters
         const smoothed = validDetected[bestIdx].map((lm, li) => {
           if (!filters[li]) filters[li] = new EMAFilter(EMA_ALPHA);
           const filtered = filters[li].filter(lm.x, lm.y);
@@ -222,7 +268,7 @@ export class HandTracker {
       }
     }
 
-    // Add any newly detected hands not yet tracked
+    // 2. Register any newly detected hands not yet tracked
     for (let i = 0; i < validDetected.length; i++) {
       if (!usedDetected.has(i)) {
         const filters = Array.from({ length: 21 }, () => new EMAFilter(EMA_ALPHA));
@@ -238,7 +284,7 @@ export class HandTracker {
       }
     }
 
-    // Sort by screen X position (left-to-right)
+    // Sort hands left-to-right on screen
     updated.sort((a, b) => {
       const ax = (a.landmarks && a.landmarks[0])
         ? (MIRROR_DISPLAY ? 1 - a.landmarks[0].x : a.landmarks[0].x)
@@ -254,7 +300,7 @@ export class HandTracker {
   }
 
   /**
-   * Send a video frame to MediaPipe for landmark detection.
+   * Asynchronously send video frame to MediaPipe pipeline without blocking rendering.
    * @param {HTMLVideoElement} video
    */
   sendFrame(video) {
@@ -275,7 +321,7 @@ export class HandTracker {
   }
 
   /**
-   * 2D Euclidean distance between thumb-tip and index-tip landmarks.
+   * Compute 2D normalized Euclidean distance between thumb-tip and index-tip.
    * @param {Array<{x:number,y:number,z:number}>} landmarks
    * @returns {number}
    */
@@ -288,29 +334,29 @@ export class HandTracker {
     if (typeof thumb.x !== 'number' || typeof index.x !== 'number') {
       return Infinity;
     }
-    return Math.hypot(
-      thumb.x - index.x,
-      thumb.y - index.y
-    );
+    return Math.hypot(thumb.x - index.x, thumb.y - index.y);
   }
 
   /**
-   * Hysteresis-aware pinch detection.
+   * Dual-threshold hysteresis pinch evaluation.
+   * - When NOT holding: Requires distance < PINCH_START_THRESHOLD (~0.050) to start grab.
+   * - When ALREADY holding: Requires distance >= PINCH_END_THRESHOLD (~0.080) to release grab.
    * @param {Array<{x:number,y:number,z:number}>} landmarks
-   * @param {boolean|number} [isHoldingOrThreshold]
-   * @returns {boolean}
+   * @param {boolean|number} [isHoldingOrThreshold=false]
+   * @returns {boolean} True if pinching/grabbing
    */
   static isPinching(landmarks, isHoldingOrThreshold = false) {
-    let threshold = PINCH_START_THRESHOLD; // 0.055 to start grab
+    let threshold = PINCH_START_THRESHOLD;
     if (typeof isHoldingOrThreshold === 'number') {
       threshold = isHoldingOrThreshold;
     } else if (isHoldingOrThreshold === true) {
-      threshold = PINCH_END_THRESHOLD; // 0.085 to release held object (Hysteresis)
+      threshold = PINCH_END_THRESHOLD;
     }
     return HandTracker.pinchDistance(landmarks) < threshold;
   }
 
   /**
+   * Extract fingertip landmark coordinates.
    * @param {Array<{x:number,y:number,z:number}>} landmarks
    * @returns {Array<{x:number,y:number,z:number}>}
    */
@@ -320,7 +366,7 @@ export class HandTracker {
   }
 
   /**
-   * Draw high-contrast glowing tracking indicators, cursor halo, and pinch reticle.
+   * Render high-contrast glowing tracking indicators, cursor halo, and pinch reticle.
    * @param {CanvasRenderingContext2D} ctx
    * @param {Array<Array<{x:number,y:number,z:number}>>} allLandmarks
    * @param {number} width
@@ -348,7 +394,7 @@ export class HandTracker {
       const wristPos = landmarkToCanvas(wrist, width, height);
       const pinchCenter = getPinchCenter(landmarks, width, height);
 
-      // 1. Draw subtle skeletal connectors between wrist and knuckles
+      // 1. Subtle skeletal connectors between wrist and knuckles
       ctx.save();
       ctx.strokeStyle = 'rgba(245, 241, 232, 0.2)';
       ctx.lineWidth = 1.5;
@@ -363,7 +409,7 @@ export class HandTracker {
       });
       ctx.restore();
 
-      // 2. Draw subtle palm/wrist anchor dot
+      // 2. Palm / wrist anchor dot
       ctx.save();
       ctx.beginPath();
       ctx.arc(wristPos.x, wristPos.y, 6, 0, Math.PI * 2);
@@ -371,10 +417,10 @@ export class HandTracker {
       ctx.fill();
       ctx.restore();
 
-      // 3. Render Active Cursor Halo at the pinch coordinate
+      // 3. Visual Cursor Halo & Grab Reticle at smoothed pinch point
       ctx.save();
       if (pinching) {
-        // Active locked grab beam
+        // Active locked pinch beam
         ctx.beginPath();
         ctx.moveTo(thumbPos.x, thumbPos.y);
         ctx.lineTo(indexPos.x, indexPos.y);
@@ -384,43 +430,46 @@ export class HandTracker {
         ctx.shadowBlur = 16;
         ctx.stroke();
 
-        // Pulsing active grab reticle
+        // Pulsing active grab halo
         ctx.beginPath();
-        ctx.arc(pinchCenter.x, pinchCenter.y, 15, 0, Math.PI * 2);
+        ctx.arc(pinchCenter.x, pinchCenter.y, 16, 0, Math.PI * 2);
         ctx.fillStyle = color;
         ctx.shadowColor = color;
         ctx.shadowBlur = 24;
         ctx.fill();
 
-        // Inner crisp white center for exact targeting
+        // Crisp white inner bullseye
         ctx.beginPath();
         ctx.arc(pinchCenter.x, pinchCenter.y, 5, 0, Math.PI * 2);
         ctx.fillStyle = '#FFFFFF';
         ctx.shadowBlur = 0;
         ctx.fill();
       } else {
-        // Idle cursor halo: provides visual feedback before pinching
+        // Hover cursor halo: immediate visual placement feedback before pinch-in
         ctx.beginPath();
-        ctx.arc(pinchCenter.x, pinchCenter.y, 10, 0, Math.PI * 2);
-        ctx.strokeStyle = 'rgba(244, 163, 0, 0.65)';
-        ctx.lineWidth = 2;
+        ctx.arc(pinchCenter.x, pinchCenter.y, 12, 0, Math.PI * 2);
+        ctx.strokeStyle = 'rgba(244, 163, 0, 0.75)';
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = '#F4A300';
+        ctx.shadowBlur = 8;
         ctx.stroke();
 
+        // Glowing center dot
         ctx.beginPath();
-        ctx.arc(pinchCenter.x, pinchCenter.y, 3, 0, Math.PI * 2);
+        ctx.arc(pinchCenter.x, pinchCenter.y, 4, 0, Math.PI * 2);
         ctx.fillStyle = '#F4A300';
         ctx.fill();
       }
       ctx.restore();
 
-      // 4. Draw fingertip markers with high contrast
+      // 4. High-contrast fingertip markers
       tips.forEach((lm) => {
         const { x, y } = landmarkToCanvas(lm, width, height);
         const isPinchFinger = (lm === landmarks[THUMB_TIP] || lm === landmarks[INDEX_TIP]);
         const dotRadius = pinching && isPinchFinger ? 12 : 9;
 
         ctx.save();
-        // Dark contrast outline
+        // Contrast dark background outline
         ctx.beginPath();
         ctx.arc(x, y, dotRadius + 2, 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(26, 26, 29, 0.9)';
@@ -434,7 +483,7 @@ export class HandTracker {
         ctx.shadowBlur = pinching && isPinchFinger ? 20 : 12;
         ctx.fill();
 
-        // Crisp offwhite center
+        // Crisp center core
         ctx.beginPath();
         ctx.arc(x, y, dotRadius * 0.45, 0, Math.PI * 2);
         ctx.fillStyle = '#F5F1E8';
