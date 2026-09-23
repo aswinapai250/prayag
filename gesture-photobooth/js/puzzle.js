@@ -6,6 +6,8 @@
 const GRID_SIZE = 3;
 const SCATTER_PADDING = 12;
 const SLOT_AVOID_MARGIN = 50;
+const HITBOX_EXPANSION_MARGIN = 28; // Expands touch/grab target size by 28px around each tile
+const DRAG_LERP_ALPHA = 0.65; // High-responsiveness smoothing (0.65 balances zero lag with micro-jitter suppression)
 
 export class PuzzleTile {
   /**
@@ -236,15 +238,16 @@ export class PuzzleManager {
     );
   }
 
+
   /**
    * Find tile at coordinates.
-   * Only returns a tile if the pinch coordinates actually touch that tile.
+   * Uses expanded bounding box hitbox (28px) for effortless, natural grabbing.
    * @param {number} px
    * @param {number} py
    * @returns {PuzzleTile|null}
    */
   findTileForPinch(px, py) {
-    const padding = 16; // Generous hit area for kid-friendly interaction
+    const padding = HITBOX_EXPANSION_MARGIN;
     // Check top tiles first (reverse order)
     for (let i = this.tiles.length - 1; i >= 0; i--) {
       const tile = this.tiles[i];
@@ -288,7 +291,7 @@ export class PuzzleManager {
   }
 
   /**
-   * Update position of currently held tile with smooth lerp.
+   * Update position of currently held tile with high-responsiveness EMA filter.
    * @param {number} px
    * @param {number} py
    */
@@ -302,9 +305,9 @@ export class PuzzleManager {
     targetX = Math.max(0, Math.min(this.canvasW - this.activeDragTile.tileW, targetX));
     targetY = Math.max(0, Math.min(this.canvasH - this.activeDragTile.tileH, targetY));
 
-    // Smooth lerp to eliminate hand tracking jitter
-    this.activeDragTile.x = this.activeDragTile.x * 0.25 + targetX * 0.75;
-    this.activeDragTile.y = this.activeDragTile.y * 0.25 + targetY * 0.75;
+    // Responsive EMA filter (0.65 new + 0.35 prev)
+    this.activeDragTile.x = this.activeDragTile.x * (1 - DRAG_LERP_ALPHA) + targetX * DRAG_LERP_ALPHA;
+    this.activeDragTile.y = this.activeDragTile.y * (1 - DRAG_LERP_ALPHA) + targetY * DRAG_LERP_ALPHA;
   }
 
   /**
