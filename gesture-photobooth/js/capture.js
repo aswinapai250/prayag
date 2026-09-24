@@ -260,27 +260,42 @@ export class CaptureManager {
 
   /**
    * Freeze the current canvas frame into an offscreen snapshot with active filter.
+   * Stores raw snapshot to allow dynamic filter updating during puzzle mode.
    * @param {HTMLCanvasElement} sourceCanvas
    */
   freezeFromCanvas(sourceCanvas) {
-    this.frozenCanvas = document.createElement('canvas');
-    this.frozenCanvas.width = sourceCanvas.width;
-    this.frozenCanvas.height = sourceCanvas.height;
-    const fctx = this.frozenCanvas.getContext('2d');
+    this.rawCanvas = document.createElement('canvas');
+    this.rawCanvas.width = sourceCanvas.width;
+    this.rawCanvas.height = sourceCanvas.height;
+    const rctx = this.rawCanvas.getContext('2d');
+    rctx.drawImage(sourceCanvas, 0, 0);
 
-    // Draw with active filter
-    applyFilterToContext(fctx, this.activeFilter);
-    fctx.drawImage(sourceCanvas, 0, 0);
-
-    if (this.activeFilter === FilterPresets.GRAIN) {
-      addFilmGrain(fctx, 0, 0, this.frozenCanvas.width, this.frozenCanvas.height);
-    }
+    this.updateFrozenCanvas();
 
     this.isFrozen = true;
     this.flashUntil = performance.now() + FLASH_DURATION_MS;
 
     if (this.onFlash) {
       this.onFlash();
+    }
+  }
+
+  /**
+   * Re-generate frozenCanvas from rawCanvas applying current activeFilter.
+   */
+  updateFrozenCanvas() {
+    if (!this.rawCanvas) return;
+    this.frozenCanvas = document.createElement('canvas');
+    this.frozenCanvas.width = this.rawCanvas.width;
+    this.frozenCanvas.height = this.rawCanvas.height;
+    const fctx = this.frozenCanvas.getContext('2d');
+
+    // Draw with active filter
+    applyFilterToContext(fctx, this.activeFilter);
+    fctx.drawImage(this.rawCanvas, 0, 0);
+
+    if (this.activeFilter === FilterPresets.GRAIN) {
+      addFilmGrain(fctx, 0, 0, this.frozenCanvas.width, this.frozenCanvas.height);
     }
   }
 
@@ -373,6 +388,7 @@ export class CaptureManager {
     this.isCountingDown = false;
     this.isFrozen = false;
     this.frozenCanvas = null;
+    this.rawCanvas = null;
     this.countdownValue = 0;
     this.countdownStartTime = 0;
     this.onCountdownComplete = null;

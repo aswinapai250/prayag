@@ -375,6 +375,56 @@ export class PuzzleManager {
     return { snapped, isSolved: solved };
   }
 
+  /**
+   * Update the imagery of existing puzzle tiles when the filter changes,
+   * without disturbing tile positions, scatter, or lock state.
+   * @param {HTMLCanvasElement} newSourceCanvas
+   */
+  updateSourceImage(newSourceCanvas) {
+    if (!this.isActive || this.tiles.length === 0 || !newSourceCanvas) return;
+
+    for (const tile of this.tiles) {
+      const tctx = tile.imageCanvas.getContext('2d');
+      tctx.clearRect(0, 0, tile.imageCanvas.width, tile.imageCanvas.height);
+      tctx.drawImage(
+        newSourceCanvas,
+        tile.col * this.tileW,
+        tile.row * this.tileH,
+        this.tileW,
+        this.tileH,
+        0,
+        0,
+        tile.imageCanvas.width,
+        tile.imageCanvas.height
+      );
+    }
+  }
+
+  /**
+   * Instantly solve the puzzle by moving all tiles to their slots,
+   * locking them, and triggering celebration confetti.
+   * @param {number} [timestamp]
+   * @returns {{ isSolved: boolean }}
+   */
+  solveAutomatically(timestamp = 0) {
+    if (!this.isActive || this.tiles.length === 0) return { isSolved: false };
+
+    const now = timestamp || performance.now();
+    for (const tile of this.tiles) {
+      tile.x = tile.slotX;
+      tile.y = tile.slotY;
+      tile.locked = true;
+      tile.isDragging = false;
+      tile.snapTime = now;
+    }
+    this.activeDragTile = null;
+
+    if (!this.solvedAt) {
+      this.triggerSolved(now);
+    }
+    return { isSolved: true };
+  }
+
   /** @returns {boolean} */
   isSolved() {
     return (

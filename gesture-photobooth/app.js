@@ -10,7 +10,7 @@
 
 import { HandTracker, MIRROR_DISPLAY, getPinchCenter } from './js/handTracking.js';
 import { GestureStateMachine, AppState } from './js/gestureState.js';
-import { CaptureManager, FilterPresets, compositeFilmStrip } from './js/capture.js';
+import { CaptureManager, FilterPresets, compositeFilmStrip, applyFilterToContext, addFilmGrain } from './js/capture.js';
 import { PuzzleManager } from './js/puzzle.js';
 import { SidebarManager } from './js/sidebar.js';
 import { audioManager } from './js/audio.js';
@@ -25,6 +25,7 @@ const errorMessage = document.getElementById('error-message');
 const retryCameraBtn = document.getElementById('retry-camera-btn');
 const demoPhotoBtn = document.getElementById('demo-photo-btn');
 const resetBtn = document.getElementById('reset-btn');
+const solveBtn = document.getElementById('solve-btn');
 const screenFlash = document.getElementById('screen-flash');
 
 // Sound Elements
@@ -173,13 +174,18 @@ stateMachine.onAutoReset = () => {
  * @param {number} h
  */
 function drawVideoFrame(context, source, w, h) {
+  context.save();
+  applyFilterToContext(context, captureManager.activeFilter);
   if (MIRROR_DISPLAY) {
-    context.save();
     context.scale(-1, 1);
     context.drawImage(source, -w, 0, w, h);
-    context.restore();
   } else {
     context.drawImage(source, 0, 0, w, h);
+  }
+  context.restore();
+
+  if (captureManager.activeFilter === FilterPresets.GRAIN) {
+    addFilmGrain(context, 0, 0, w, h);
   }
 }
 
@@ -431,6 +437,7 @@ function createDemoSnapshot() {
   captureManager.freezeFromCanvas(demoCanvas);
   puzzleManager.createFromSnapshot(captureManager.frozenCanvas);
   stateMachine.setState(AppState.PUZZLE);
+  handTracker.setPuzzleMode(true);
   updateBanner();
 }
 
@@ -442,6 +449,26 @@ function setupUIListeners() {
     audioManager.unlock();
     handleReset();
   });
+
+  if (solveBtn) {
+    solveBtn.addEventListener('click', () => {
+      audioManager.unlock();
+      if (stateMachine.state !== AppState.PUZZLE || !puzzleManager.isActive) {
+        if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && video.videoWidth > 0) {
+          drawVideoFrame(ctx, video, canvas.width, canvas.height);
+          captureManager.freezeFromCanvas(canvas);
+          puzzleManager.createFromSnapshot(captureManager.frozenCanvas);
+          stateMachine.setState(AppState.PUZZLE);
+          handTracker.setPuzzleMode(true);
+          updateBanner();
+        } else {
+          createDemoSnapshot();
+        }
+      }
+      puzzleManager.solveAutomatically(performance.now());
+      handlePuzzleSolved();
+    });
+  }
 
   if (retryCameraBtn) {
     retryCameraBtn.addEventListener('click', async () => {
@@ -473,6 +500,12 @@ function setupUIListeners() {
       pill.setAttribute('aria-checked', 'true');
       const filter = pill.dataset.filter || FilterPresets.NORMAL;
       captureManager.setFilter(filter);
+
+      if (stateMachine.state === AppState.PUZZLE && puzzleManager.isActive) {
+        // If already solving a puzzle, dynamically update the existing puzzle pieces with the new filter
+        captureManager.updateFrozenCanvas();
+        puzzleManager.updateSourceImage(captureManager.frozenCanvas);
+      }
     });
   });
 
