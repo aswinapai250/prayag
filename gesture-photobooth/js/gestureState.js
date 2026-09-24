@@ -25,8 +25,8 @@ export const GestureType = {
 /** Cooldown period in ms after photo capture before another capture can trigger. */
 const CAPTURE_COOLDOWN_MS = 1000;
 
-/** Consecutive frames of 2-hand pinch required to start countdown (filters out transient noise). */
-const PINCH_DEBOUNCE_FRAMES = 4;
+/** Dwell hold duration in ms (0.45s) required to trigger capture (filters out accidental touch). */
+const DWELL_DURATION_MS = 450;
 
 /** Consecutive frames of opened fingers required before firing drag release (guards against tracking loss). */
 const RELEASE_DEBOUNCE_FRAMES = 2;
@@ -36,6 +36,8 @@ export class GestureStateMachine {
     /** @type {string} */
     this.state = AppState.IDLE;
     this.pinchHoldFrames = 0;
+    this.dwellStartTime = 0;
+    this.dwellProgress = 0;
     this.lastCaptureTime = 0;
 
     /** Callbacks */
@@ -145,19 +147,30 @@ export class GestureStateMachine {
       // Respect capture cooldown
       if (timestamp - this.lastCaptureTime < CAPTURE_COOLDOWN_MS) {
         this.pinchHoldFrames = 0;
+        this.dwellStartTime = 0;
+        this.dwellProgress = 0;
         return this.state;
       }
 
-      // Check for dual-hand pinch trigger
+      // Check for dual-hand pinch trigger with smooth dwell circular timer
       if (this.detectTwoHandPinch(landmarks)) {
-        this.pinchHoldFrames += 1;
-        if (this.pinchHoldFrames >= PINCH_DEBOUNCE_FRAMES && this.onCaptureTrigger) {
+        if (!this.dwellStartTime) {
+          this.dwellStartTime = timestamp;
+        }
+        const elapsed = timestamp - this.dwellStartTime;
+        this.dwellProgress = Math.min(1.0, elapsed / DWELL_DURATION_MS);
+
+        if (this.dwellProgress >= 1.0 && this.onCaptureTrigger) {
+          this.dwellStartTime = 0;
+          this.dwellProgress = 0;
           this.pinchHoldFrames = 0;
           this.lastCaptureTime = timestamp;
           this.state = AppState.COUNTDOWN;
           this.onCaptureTrigger();
         }
       } else {
+        this.dwellStartTime = 0;
+        this.dwellProgress = 0;
         this.pinchHoldFrames = 0;
       }
     } else if (this.state === AppState.PUZZLE) {
@@ -242,6 +255,8 @@ export class GestureStateMachine {
   /** @param {string} newState */
   setState(newState) {
     this.state = newState;
+    this.dwellStartTime = 0;
+    this.dwellProgress = 0;
     if (newState === AppState.SOLVED) {
       this.solvedAt = performance.now();
     } else {
@@ -256,6 +271,8 @@ export class GestureStateMachine {
   reset() {
     this.state = AppState.IDLE;
     this.pinchHoldFrames = 0;
+    this.dwellStartTime = 0;
+    this.dwellProgress = 0;
     this.noHandSince = 0;
     this.solvedAt = 0;
     this.activeDragWrist = null;

@@ -79,10 +79,12 @@ export class PuzzleTile {
     const isSnapping = this.snapTime > 0 && timestamp - this.snapTime < 350;
 
     if (this.isDragging) {
-      // Elevated grab highlight
-      ctx.shadowColor = '#3FBAC2';
-      ctx.shadowBlur = 20;
-      const scale = 1.08;
+      // Elevated grab highlight: +5% scale, elevated shadow, and soft teal aura
+      ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+      ctx.shadowBlur = 24;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 10;
+      const scale = 1.05;
       const cx = drawX + this.tileW / 2;
       const cy = drawY + this.tileH / 2;
       ctx.translate(cx, cy);
@@ -147,6 +149,12 @@ export class PuzzleManager {
 
     this.solvedAt = 0;
     this.particles = [];
+
+    /** Audio and state callbacks */
+    /** @type {((tile: PuzzleTile) => void)|null} */
+    this.onTileSnap = null;
+    /** @type {(() => void)|null} */
+    this.onPuzzleSolved = null;
   }
 
   /**
@@ -312,7 +320,7 @@ export class PuzzleManager {
   }
 
   /**
-   * Update position of currently dragged tile with high-responsiveness EMA filter.
+   * Update position of currently dragged tile with 1:1 immediate tracking.
    * @param {number} px
    * @param {number} py
    */
@@ -326,9 +334,9 @@ export class PuzzleManager {
     targetX = Math.max(0, Math.min(this.canvasW - this.activeDragTile.tileW, targetX));
     targetY = Math.max(0, Math.min(this.canvasH - this.activeDragTile.tileH, targetY));
 
-    // Responsive EMA filter (0.65 new + 0.35 prev)
-    this.activeDragTile.x = this.activeDragTile.x * (1 - DRAG_LERP_ALPHA) + targetX * DRAG_LERP_ALPHA;
-    this.activeDragTile.y = this.activeDragTile.y * (1 - DRAG_LERP_ALPHA) + targetY * DRAG_LERP_ALPHA;
+    // Direct 1:1 zero-lag tracking
+    this.activeDragTile.x = targetX;
+    this.activeDragTile.y = targetY;
   }
 
   /**
@@ -354,6 +362,9 @@ export class PuzzleManager {
       tile.locked = true;
       tile.snapTime = timestamp || performance.now();
       snapped = true;
+      if (this.onTileSnap) {
+        this.onTileSnap(tile);
+      }
     }
 
     const solved = this.isSolved();
@@ -378,6 +389,9 @@ export class PuzzleManager {
   triggerSolved(timestamp) {
     this.solvedAt = timestamp;
     this.particles = [];
+    if (this.onPuzzleSolved) {
+      this.onPuzzleSolved();
+    }
     const colors = ['#F4A300', '#3FBAC2', '#F5F1E8', '#FF6B6B', '#51CF66'];
     for (let i = 0; i < 90; i++) {
       this.particles.push({

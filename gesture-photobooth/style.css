@@ -60,19 +60,35 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
-  background: rgba(26, 26, 29, 0.95);
+  padding: 8px 18px;
+  background: rgba(26, 26, 29, 0.96);
   backdrop-filter: blur(12px);
   border-bottom: 2px solid var(--accent-amber);
   z-index: 25;
-  gap: 12px;
+  gap: 14px;
   box-shadow: var(--shadow-sm);
 }
 
-.banner-text {
+.banner-left,
+.banner-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.banner-center {
   flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+}
+
+.banner-text {
   font-family: var(--font-display);
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
   text-align: center;
   color: var(--text-offwhite);
@@ -81,6 +97,42 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.filter-pill {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  letter-spacing: 0.2px;
+}
+
+.filter-pill:hover {
+  color: var(--text-offwhite);
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.filter-pill.active {
+  background: var(--accent-amber);
+  color: var(--bg-darker);
+  border-color: var(--accent-amber);
+  box-shadow: 0 0 10px var(--accent-amber-glow);
 }
 
 .icon-nav-btn {
@@ -165,6 +217,26 @@ body {
   pointer-events: none;
 }
 
+/* Screen Flash Overlay FX */
+.screen-flash {
+  position: absolute;
+  inset: 0;
+  background: #FFFFFF;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 40;
+}
+
+.screen-flash.flashing {
+  animation: screenFlashAnim 0.4s ease-out forwards;
+}
+
+@keyframes screenFlashAnim {
+  0% { opacity: 0.95; background: #FFFFFF; }
+  35% { opacity: 0.75; background: #FFF6E0; }
+  100% { opacity: 0; }
+}
+
 /* Error & Permission Overlay */
 .error-overlay {
   position: absolute;
@@ -187,13 +259,13 @@ body {
   border: 1px solid rgba(225, 82, 61, 0.4);
   border-radius: 16px;
   padding: 32px 28px;
-  max-width: 440px;
+  max-width: 460px;
   text-align: center;
   box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: 18px;
   animation: scaleFadeIn 0.3s ease-out;
 }
 
@@ -202,19 +274,28 @@ body {
 }
 
 .error-card p {
-  font-size: 18px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--text-offwhite);
   line-height: 1.5;
+}
+
+.error-buttons {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 6px;
 }
 
 .retry-btn {
   background: var(--accent-amber);
   color: var(--bg-darker);
   font-family: var(--font-body);
-  font-size: 16px;
-  font-weight: 700;
-  padding: 12px 24px;
+  font-size: 15px;
+  font-weight: 800;
+  padding: 12px 20px;
   border-radius: 10px;
   border: none;
   cursor: pointer;
@@ -224,6 +305,26 @@ body {
 
 .retry-btn:hover {
   background: #ffb820;
+  transform: scale(1.04);
+}
+
+.demo-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  color: var(--text-offwhite);
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 700;
+  padding: 12px 20px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.demo-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: var(--accent-teal);
+  color: #FFFFFF;
   transform: scale(1.04);
 }
 
@@ -244,13 +345,13 @@ body {
   gap: 8px;
   padding: 12px 24px;
   font-family: var(--font-body);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 800;
-  color: var(--bg-darker);
-  background: var(--accent-amber);
   border: none;
   border-radius: 12px;
   cursor: pointer;
+  color: var(--bg-darker);
+  background: var(--accent-amber);
   box-shadow: var(--shadow-md), 0 0 16px var(--accent-amber-glow);
   transition: transform 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
@@ -262,6 +363,10 @@ body {
 }
 
 .reset-btn:active {
+  transform: scale(0.97);
+}
+
+.stage-btn:active {
   transform: scale(0.97);
 }
 
@@ -418,6 +523,23 @@ body {
   transition: transform 0.25s ease, box-shadow 0.25s ease;
   animation: stripSlideIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275);
   position: relative;
+}
+
+.strip-card.new-entrance {
+  animation: stripSlideIn 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275), cardFlashGlow 0.85s ease-out;
+}
+
+@keyframes cardFlashGlow {
+  0% {
+    box-shadow: 0 0 24px rgba(244, 163, 0, 0.95), 0 0 8px #FFFFFF;
+    transform: translateY(-16px) scale(0.96);
+  }
+  40% {
+    box-shadow: 0 0 16px rgba(244, 163, 0, 0.5);
+  }
+  100% {
+    box-shadow: var(--shadow-md);
+  }
 }
 
 .strip-card:nth-child(odd) {

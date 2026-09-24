@@ -33,34 +33,60 @@
   <div id="app">
     <!-- Top Navigation & Instruction Banner -->
     <header id="instruction-banner" class="instruction-banner" role="banner">
-      <button id="help-btn" class="icon-nav-btn help-btn" type="button" aria-label="Open gesture instructions guide" title="How to Play">
-        <span class="btn-icon">💡</span>
-        <span class="btn-text">Guide</span>
-      </button>
+      <div class="banner-left">
+        <button id="help-btn" class="icon-nav-btn help-btn" type="button" aria-label="Open gesture instructions guide" title="How to Play">
+          <span class="btn-icon">💡</span>
+          <span class="btn-text">Guide</span>
+        </button>
+        <button id="sound-btn" class="icon-nav-btn sound-btn" type="button" aria-label="Toggle sound effects" title="Toggle Sound">
+          <span id="sound-icon" class="btn-icon">🔊</span>
+          <span id="sound-text" class="btn-text">Sound</span>
+        </button>
+      </div>
       
-      <div id="banner-text" class="banner-text" aria-live="polite">
-        Pinch both hands to capture! Pinch one hand to drag pieces!
+      <div class="banner-center">
+        <div id="banner-text" class="banner-text" aria-live="polite">
+          Pinch both hands to capture! Pinch one hand to drag pieces!
+        </div>
+        
+        <!-- Filter Preset Selector Pills -->
+        <div class="filter-bar" role="radiogroup" aria-label="Photobooth Filter Presets">
+          <button class="filter-pill active" data-filter="normal" type="button" role="radio" aria-checked="true">Normal</button>
+          <button class="filter-pill" data-filter="bw" type="button" role="radio" aria-checked="false">Vintage B&amp;W</button>
+          <button class="filter-pill" data-filter="sepia" type="button" role="radio" aria-checked="false">Warm Sepia</button>
+          <button class="filter-pill" data-filter="grain" type="button" role="radio" aria-checked="false">Film Grain</button>
+        </div>
       </div>
 
-      <button id="gallery-toggle-btn" class="icon-nav-btn gallery-toggle-btn" type="button" aria-label="Toggle photo strip gallery" title="Photo Strips">
-        <span class="btn-icon">📸</span>
-        <span class="btn-text">Gallery</span>
-        <span id="gallery-badge" class="badge">0</span>
-      </button>
+      <div class="banner-right">
+        <button id="gallery-toggle-btn" class="icon-nav-btn gallery-toggle-btn" type="button" aria-label="Toggle photo strip gallery" title="Photo Strips">
+          <span class="btn-icon">📸</span>
+          <span class="btn-text">Gallery</span>
+          <span id="gallery-badge" class="badge">0</span>
+        </button>
+      </div>
     </header>
 
     <!-- Main Canvas Stage Area -->
     <main id="stage" role="main">
       <canvas id="main-canvas" aria-label="Interactive gesture photo booth and puzzle canvas" role="img"></canvas>
       
+      <!-- Full-screen Camera Flash FX -->
+      <div id="screen-flash" class="screen-flash" aria-hidden="true"></div>
+
       <!-- Error & Permission Fallback Overlay -->
       <div id="error-overlay" class="error-overlay hidden" role="alert" aria-live="assertive">
         <div class="error-card">
           <div class="error-icon">📷</div>
           <p id="error-message">Camera access is required for hand tracking.</p>
-          <button id="retry-camera-btn" class="retry-btn" type="button" aria-label="Retry camera connection">
-            🔄 Enable Camera
-          </button>
+          <div class="error-buttons">
+            <button id="retry-camera-btn" class="retry-btn" type="button" aria-label="Retry camera connection">
+              🔄 Enable Camera
+            </button>
+            <button id="demo-photo-btn" class="demo-btn" type="button" aria-label="Play with a sample demo photo">
+              ✨ Play Demo Puzzle
+            </button>
+          </div>
         </div>
       </div>
 

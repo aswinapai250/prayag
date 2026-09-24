@@ -30,11 +30,9 @@ export const PINCH_END_THRESHOLD = 0.080;   // Release threshold (Pinch-Out)
 
 /**
  * Exponential Moving Average (EMA) Smoothing Factor (0.0 < ALPHA <= 1.0):
- * - ALPHA = 0.45: Ideal sweet spot balancing zero noticeable latency with excellent jitter suppression.
- * - Lower values (e.g., 0.30) = buttery smooth but slight visual drag lag.
- * - Higher values (e.g., 0.65) = instantaneous response but more camera sensor noise.
+ * - ALPHA = 0.75: Instantaneous, zero-lag response with high-performance jitter suppression.
  */
-export const EMA_ALPHA = 0.45;
+export const EMA_ALPHA = 0.75;
 
 /** Mirror front-camera display so hands move naturally like looking into a mirror. */
 export const MIRROR_DISPLAY = true;
@@ -366,13 +364,15 @@ export class HandTracker {
   }
 
   /**
-   * Render high-contrast glowing tracking indicators, cursor halo, and pinch reticle.
+   * Render high-contrast glowing tracking indicators, translucent target rings, cursor halo,
+   * and smooth dwell circular progress rings for 2-hand capture.
    * @param {CanvasRenderingContext2D} ctx
    * @param {Array<Array<{x:number,y:number,z:number}>>} allLandmarks
    * @param {number} width
    * @param {number} height
+   * @param {number} [dwellProgress=0] 0.0 to 1.0 dwell hold progress
    */
-  static drawTrackingDots(ctx, allLandmarks, width, height) {
+  static drawTrackingDots(ctx, allLandmarks, width, height, dwellProgress = 0) {
     if (!Array.isArray(allLandmarks) || allLandmarks.length === 0) return;
 
     const colors = ['#3FBAC2', '#F4A300', '#FF6B6B', '#51CF66'];
@@ -420,23 +420,53 @@ export class HandTracker {
       // 3. Visual Cursor Halo & Grab Reticle at smoothed pinch point
       ctx.save();
       if (pinching) {
-        // Active locked pinch beam
+        // Active locked pinch beam between thumb and index
         ctx.beginPath();
         ctx.moveTo(thumbPos.x, thumbPos.y);
         ctx.lineTo(indexPos.x, indexPos.y);
         ctx.strokeStyle = color;
-        ctx.lineWidth = 4;
+        ctx.lineWidth = 3.5;
         ctx.shadowColor = color;
-        ctx.shadowBlur = 16;
+        ctx.shadowBlur = 14;
         ctx.stroke();
 
-        // Pulsing active grab halo
-        ctx.beginPath();
-        ctx.arc(pinchCenter.x, pinchCenter.y, 16, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = 24;
-        ctx.fill();
+        // If dwelling for capture, render circular dwell progress ring
+        if (dwellProgress > 0) {
+          const dwellRadius = 32;
+
+          // Translucent track background
+          ctx.beginPath();
+          ctx.arc(pinchCenter.x, pinchCenter.y, dwellRadius, 0, Math.PI * 2);
+          ctx.strokeStyle = 'rgba(244, 163, 0, 0.3)';
+          ctx.lineWidth = 5;
+          ctx.stroke();
+
+          // Glowing animated progress arc
+          ctx.beginPath();
+          const startAngle = -Math.PI / 2;
+          const endAngle = startAngle + (Math.PI * 2 * dwellProgress);
+          ctx.arc(pinchCenter.x, pinchCenter.y, dwellRadius, startAngle, endAngle);
+          ctx.strokeStyle = '#F4A300';
+          ctx.lineWidth = 6;
+          ctx.lineCap = 'round';
+          ctx.shadowColor = '#F4A300';
+          ctx.shadowBlur = 20;
+          ctx.stroke();
+
+          // Inner dwell pulse
+          ctx.beginPath();
+          ctx.arc(pinchCenter.x, pinchCenter.y, 10 + dwellProgress * 6, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(244, 163, 0, ${0.4 + dwellProgress * 0.4})`;
+          ctx.fill();
+        } else {
+          // Standard pulsing active grab halo
+          ctx.beginPath();
+          ctx.arc(pinchCenter.x, pinchCenter.y, 16, 0, Math.PI * 2);
+          ctx.fillStyle = color;
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 24;
+          ctx.fill();
+        }
 
         // Crisp white inner bullseye
         ctx.beginPath();
@@ -462,13 +492,23 @@ export class HandTracker {
       }
       ctx.restore();
 
-      // 4. High-contrast fingertip markers
+      // 4. Translucent target rings & high-contrast fingertip markers
       tips.forEach((lm) => {
         const { x, y } = landmarkToCanvas(lm, width, height);
         const isPinchFinger = (lm === landmarks[THUMB_TIP] || lm === landmarks[INDEX_TIP]);
         const dotRadius = pinching && isPinchFinger ? 12 : 9;
 
         ctx.save();
+
+        // Translucent target ring on active index and thumb
+        if (isPinchFinger) {
+          ctx.beginPath();
+          ctx.arc(x, y, dotRadius + 8, 0, Math.PI * 2);
+          ctx.strokeStyle = pinching ? 'rgba(244, 163, 0, 0.6)' : 'rgba(63, 186, 194, 0.45)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
+
         // Contrast dark background outline
         ctx.beginPath();
         ctx.arc(x, y, dotRadius + 2, 0, Math.PI * 2);
@@ -478,9 +518,9 @@ export class HandTracker {
         // Glowing colored ring
         ctx.beginPath();
         ctx.arc(x, y, dotRadius, 0, Math.PI * 2);
-        ctx.fillStyle = color;
-        ctx.shadowColor = color;
-        ctx.shadowBlur = pinching && isPinchFinger ? 20 : 12;
+        ctx.fillStyle = isPinchFinger && pinching ? '#F4A300' : color;
+        ctx.shadowColor = isPinchFinger && pinching ? '#F4A300' : color;
+        ctx.shadowBlur = isPinchFinger ? 18 : 10;
         ctx.fill();
 
         // Crisp center core

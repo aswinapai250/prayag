@@ -52,9 +52,14 @@ export class SidebarManager {
     const highResPng = canvas.toDataURL('image/png');
 
     const card = document.createElement('div');
-    card.className = 'strip-card';
+    card.className = 'strip-card new-entrance';
     card.setAttribute('role', 'article');
     card.setAttribute('aria-label', `Photo strip #${currentId}`);
+
+    // Remove flash highlight after entrance finishes
+    setTimeout(() => {
+      card.classList.remove('new-entrance');
+    }, 1000);
 
     // Image wrapper
     const imgWrapper = document.createElement('div');

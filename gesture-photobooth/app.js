@@ -10,9 +10,10 @@
 
 import { HandTracker, MIRROR_DISPLAY, getPinchCenter } from './js/handTracking.js';
 import { GestureStateMachine, AppState } from './js/gestureState.js';
-import { CaptureManager } from './js/capture.js';
+import { CaptureManager, FilterPresets, compositeFilmStrip } from './js/capture.js';
 import { PuzzleManager } from './js/puzzle.js';
 import { SidebarManager } from './js/sidebar.js';
+import { audioManager } from './js/audio.js';
 
 // DOM Elements
 const video = document.getElementById('webcam');
@@ -22,7 +23,17 @@ const bannerText = document.getElementById('banner-text');
 const errorOverlay = document.getElementById('error-overlay');
 const errorMessage = document.getElementById('error-message');
 const retryCameraBtn = document.getElementById('retry-camera-btn');
+const demoPhotoBtn = document.getElementById('demo-photo-btn');
 const resetBtn = document.getElementById('reset-btn');
+const screenFlash = document.getElementById('screen-flash');
+
+// Sound Elements
+const soundBtn = document.getElementById('sound-btn');
+const soundIcon = document.getElementById('sound-icon');
+const soundText = document.getElementById('sound-text');
+
+// Filter Pills
+const filterPills = document.querySelectorAll('.filter-pill');
 
 // Sidebar & Gallery Elements
 const sidebar = document.getElementById('sidebar');
@@ -48,8 +59,34 @@ const captureManager = new CaptureManager();
 const puzzleManager = new PuzzleManager();
 const sidebarManager = new SidebarManager(sidebarStrips, sidebarEmpty, galleryBadge, stripsCountTag);
 
-let lastProcessTime = 0;
-const PROCESS_INTERVAL_MS = 28; // ~35 FPS vision processing interval (keeps CPU cool while canvas runs at 60 FPS)
+/**
+ * Trigger full-screen camera flash effect.
+ */
+function triggerScreenFlash() {
+  if (screenFlash) {
+    screenFlash.classList.remove('flashing');
+    void screenFlash.offsetWidth; // Force CSS reflow
+    screenFlash.classList.add('flashing');
+  }
+}
+
+// Hook Audio Manager Cues to capture & puzzle events
+captureManager.onTick = (count) => {
+  audioManager.playTick(count);
+};
+
+captureManager.onFlash = () => {
+  audioManager.playShutter();
+  triggerScreenFlash();
+};
+
+puzzleManager.onTileSnap = () => {
+  audioManager.playSnap();
+};
+
+puzzleManager.onPuzzleSolved = () => {
+  audioManager.playVictory();
+};
 
 /**
  * Display user-facing modal error.
@@ -64,9 +101,14 @@ function hideError() {
   errorOverlay.classList.add('hidden');
 }
 
+let lastBannerText = '';
 function updateBanner() {
   if (bannerText) {
-    bannerText.textContent = stateMachine.getInstructionText();
+    const text = stateMachine.getInstructionText();
+    if (text !== lastBannerText) {
+      lastBannerText = text;
+      bannerText.textContent = text;
+    }
   }
 }
 
@@ -81,7 +123,9 @@ function handlePuzzleSolved() {
   stateMachine.setState(AppState.SOLVED);
   updateBanner();
   if (captureManager.frozenCanvas) {
-    sidebarManager.addStrip(captureManager.frozenCanvas);
+    // Composite authentic retro photobooth film strip with classic vertical framing & watermark
+    const filmStripCanvas = captureManager.getCompositedStrip() || captureManager.frozenCanvas;
+    sidebarManager.addStrip(filmStripCanvas);
   }
 }
 
@@ -95,6 +139,7 @@ function handleCaptureComplete() {
 }
 
 stateMachine.onCaptureTrigger = () => {
+  audioManager.unlock();
   captureManager.startCountdown(handleCaptureComplete);
 };
 
@@ -242,11 +287,11 @@ function gameLoop(timestamp) {
       // SINGLE-HAND LOCK: Only render visual cursor for the active primary hand
       const activeHand = stateMachine.getActivePuzzleHand(handTracker.landmarks);
       if (activeHand) {
-        HandTracker.drawTrackingDots(ctx, [activeHand], w, h);
+        HandTracker.drawTrackingDots(ctx, [activeHand], w, h, 0);
       }
     } else {
-      // Idle / Countdown: render all hands for 2-hand pinch feedback
-      HandTracker.drawTrackingDots(ctx, handTracker.landmarks, w, h);
+      // Idle / Countdown: render all hands with smooth dwell circular progress for 2-hand pinch feedback
+      HandTracker.drawTrackingDots(ctx, handTracker.landmarks, w, h, stateMachine.dwellProgress);
     }
   }
 
@@ -263,38 +308,45 @@ function gameLoop(timestamp) {
 
   captureManager.update(timestamp);
 
-  // 4. Asynchronously send video frame to MediaPipe pipeline (throttled to ~35 FPS)
-  if (timestamp - lastProcessTime >= PROCESS_INTERVAL_MS) {
-    lastProcessTime = timestamp;
-
-    if (showLiveFeed || isCountingDown || inPuzzle) {
-      handTracker.sendFrame(video);
-    }
-
-    stateMachine.update({ landmarks: handTracker.landmarks }, timestamp);
-    updateBanner();
+  // 4. Asynchronously send video frame to MediaPipe pipeline (runs continuously as frames complete)
+  if (showLiveFeed || isCountingDown || inPuzzle) {
+    handTracker.sendFrame(video);
   }
+
+  // Update gesture state machine on every animation frame for zero-lag responsiveness
+  stateMachine.update({ landmarks: handTracker.landmarks }, timestamp);
+  updateBanner();
 }
 
 /**
- * Mouse interaction fallback for testing without webcam.
+ * Universal Pointer & Touch fallback for puzzle piece dragging & snapping.
+ * Ensures accessibility on touchscreens and mice without camera dependencies.
  */
-function setupMouseFallback() {
-  let isMouseDown = false;
+function setupPointerFallback() {
+  let isPointerDown = false;
+  let activePointerId = null;
 
-  canvas.addEventListener('mousedown', (e) => {
+  canvas.style.touchAction = 'none';
+
+  canvas.addEventListener('pointerdown', (e) => {
+    audioManager.unlock();
     if (stateMachine.state !== AppState.PUZZLE) return;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     const px = (e.clientX - rect.left) * scaleX;
     const py = (e.clientY - rect.top) * scaleY;
-    isMouseDown = true;
+    isPointerDown = true;
+    activePointerId = e.pointerId;
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (_) {}
     puzzleManager.startDrag(px, py);
   });
 
-  window.addEventListener('mousemove', (e) => {
-    if (!isMouseDown || stateMachine.state !== AppState.PUZZLE) return;
+  window.addEventListener('pointermove', (e) => {
+    if (!isPointerDown || stateMachine.state !== AppState.PUZZLE) return;
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -303,29 +355,145 @@ function setupMouseFallback() {
     puzzleManager.updateDrag(px, py);
   });
 
-  window.addEventListener('mouseup', () => {
-    if (!isMouseDown) return;
-    isMouseDown = false;
+  const handlePointerEnd = (e) => {
+    if (!isPointerDown) return;
+    if (activePointerId !== null && e.pointerId !== activePointerId) return;
+    isPointerDown = false;
+    activePointerId = null;
+    try {
+      canvas.releasePointerCapture(e.pointerId);
+    } catch (_) {}
     if (stateMachine.state !== AppState.PUZZLE) return;
     const { isSolved } = puzzleManager.endDrag(performance.now());
     if (isSolved && stateMachine.state !== AppState.SOLVED) {
       handlePuzzleSolved();
     }
-  });
+  };
+
+  window.addEventListener('pointerup', handlePointerEnd);
+  window.addEventListener('pointercancel', handlePointerEnd);
+}
+
+/**
+ * Generate a colorful demo photo booth snapshot so users can test immediately without a camera.
+ */
+function createDemoSnapshot() {
+  const demoCanvas = document.createElement('canvas');
+  demoCanvas.width = 640;
+  demoCanvas.height = 480;
+  const dctx = demoCanvas.getContext('2d');
+
+  // Gradient background
+  const grad = dctx.createLinearGradient(0, 0, 640, 480);
+  grad.addColorStop(0, '#1A1A1D');
+  grad.addColorStop(0.5, '#261F38');
+  grad.addColorStop(1, '#112C38');
+  dctx.fillStyle = grad;
+  dctx.fillRect(0, 0, 640, 480);
+
+  // Festive party confetti
+  const colors = ['#F4A300', '#3FBAC2', '#FF6B6B', '#51CF66', '#FFFFFF'];
+  for (let i = 0; i < 45; i++) {
+    dctx.fillStyle = colors[i % colors.length];
+    dctx.beginPath();
+    const rx = (i * 71) % 600 + 20;
+    const ry = (i * 93) % 440 + 20;
+    dctx.arc(rx, ry, (i % 4) * 4 + 6, 0, Math.PI * 2);
+    dctx.fill();
+  }
+
+  // Polaroid card center frame
+  dctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+  dctx.fillRect(80, 60, 480, 360);
+  dctx.strokeStyle = '#F4A300';
+  dctx.lineWidth = 4;
+  dctx.strokeRect(80, 60, 480, 360);
+
+  // Emoji icons
+  dctx.font = '72px sans-serif';
+  dctx.textAlign = 'center';
+  dctx.textBaseline = 'middle';
+  dctx.fillText('✌️ 📸 🎉', 320, 190);
+
+  // Title
+  dctx.font = '700 36px Fredoka, sans-serif';
+  dctx.fillStyle = '#F4A300';
+  dctx.fillText('PRAYAG PHOTOBOOTH', 320, 280);
+
+  dctx.font = '600 20px "Nunito Sans", sans-serif';
+  dctx.fillStyle = '#F5F1E8';
+  dctx.fillText('Solve the 3x3 puzzle strip!', 320, 330);
+
+  canvas.width = 640;
+  canvas.height = 480;
+  ctx.drawImage(demoCanvas, 0, 0);
+
+  captureManager.freezeFromCanvas(demoCanvas);
+  puzzleManager.createFromSnapshot(captureManager.frozenCanvas);
+  stateMachine.setState(AppState.PUZZLE);
+  updateBanner();
 }
 
 /**
  * UI buttons and event listeners.
  */
 function setupUIListeners() {
-  resetBtn.addEventListener('click', handleReset);
+  resetBtn.addEventListener('click', () => {
+    audioManager.unlock();
+    handleReset();
+  });
 
   if (retryCameraBtn) {
     retryCameraBtn.addEventListener('click', async () => {
+      audioManager.unlock();
       const ok = await initWebcam();
       if (ok) {
         hideError();
       }
+    });
+  }
+
+  if (demoPhotoBtn) {
+    demoPhotoBtn.addEventListener('click', () => {
+      audioManager.unlock();
+      hideError();
+      createDemoSnapshot();
+    });
+  }
+
+  // Filter Presets Selector
+  filterPills.forEach((pill) => {
+    pill.addEventListener('click', () => {
+      audioManager.unlock();
+      filterPills.forEach((p) => {
+        p.classList.remove('active');
+        p.setAttribute('aria-checked', 'false');
+      });
+      pill.classList.add('active');
+      pill.setAttribute('aria-checked', 'true');
+      const filter = pill.dataset.filter || FilterPresets.NORMAL;
+      captureManager.setFilter(filter);
+    });
+  });
+
+  // Sound Toggle Button
+  if (soundBtn) {
+    const updateSoundUI = () => {
+      if (audioManager.isMuted) {
+        if (soundIcon) soundIcon.textContent = '🔇';
+        if (soundText) soundText.textContent = 'Muted';
+        soundBtn.classList.add('muted');
+      } else {
+        if (soundIcon) soundIcon.textContent = '🔊';
+        if (soundText) soundText.textContent = 'Sound';
+        soundBtn.classList.remove('muted');
+      }
+    };
+    updateSoundUI();
+    soundBtn.addEventListener('click', () => {
+      audioManager.unlock();
+      audioManager.toggleMute();
+      updateSoundUI();
     });
   }
 
@@ -373,12 +541,16 @@ function setupUIListeners() {
     }
   });
 
+  // Global Audio Unlock
+  window.addEventListener('pointerdown', () => audioManager.unlock(), { once: true });
+  window.addEventListener('keydown', () => audioManager.unlock(), { once: true });
+
   window.addEventListener('resize', resizeCanvas);
 }
 
 async function init() {
   setupUIListeners();
-  setupMouseFallback();
+  setupPointerFallback();
   updateBanner();
 
   const webcamOk = await initWebcam();
